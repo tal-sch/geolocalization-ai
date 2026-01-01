@@ -10,5 +10,5 @@
 
 
 
-    **!\[ConvNet vs ConvNet2 Diagram](images/model\_comparison.png)**
+    ![ConvNet vs ConvNet2 Diagram](images/models_figures.png)
 
