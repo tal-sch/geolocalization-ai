@@ -1,8 +1,10 @@
+from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image, ExifTags
 import torchvision.transforms.functional as TF
-
+from torch.utils.tensorboard import SummaryWriter
+import contextily as cx
 
 # Function to extract GPS coordinates from image EXIF data
 def extractCoordinates(image_path):
@@ -120,3 +122,47 @@ def plot_images_from_dataloader(dataloader, num_images=10):
 
     plt.tight_layout()
     plt.show()
+
+def setup_TensorBoard_writers():
+    current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+    base_log_dir = f"runs/experiment_{current_time}"
+
+    # Create separate writers for training and validation
+    writer_train = SummaryWriter(f"{base_log_dir}/train")
+    writer_val   = SummaryWriter(f"{base_log_dir}/val")
+
+    print(f"Tensorboard - Logging to: {base_log_dir}")
+
+    return writer_train, writer_val
+
+def log_error_map(preds, trues,  epoch, num_points = 50, TB_writer = None):
+    fig, ax = plt.subplots(figsize=(8, 3))
+    
+    # plot true coordinates (Green) and predicted coordinates (Red)
+    ax.scatter(trues[:, 1], trues[:, 0], c='lime', label='True', alpha=0.8, s=30, edgecolors='black', zorder=2)
+    ax.scatter(preds[:, 1], preds[:, 0], c='red', label='Pred', alpha=0.8, s=30, edgecolors='black', zorder=2)
+    
+    # draw lines between true and predicted points
+    for i in range(min(num_points, len(trues))):
+        ax.plot([trues[i, 1], preds[i, 1]], 
+                [trues[i, 0], preds[i, 0]], 'gray', alpha=0.3)
+    
+    ax.set_axis_off()
+    ax.set_aspect('equal')
+    plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
+    ax.margins(0, 0)
+
+    try:
+        cx.add_basemap(ax, crs='EPSG:4326', source=cx.providers.OpenStreetMap.Mapnik, alpha=1.0, reset_extent=False)
+    except Exception as e:
+        print(f"Could not fetch map tiles: {e}")
+
+    ax.legend(loc='upper right')
+    ax.set_title(f"Campus Geolocalization Analysis (Epoch {epoch})")
+    
+    if TB_writer is not None:
+        # log to tensorboard
+        TB_writer.add_figure("Analysis/Error_Map", fig, epoch)
+        plt.close(fig) 
+    else:
+        plt.show()
