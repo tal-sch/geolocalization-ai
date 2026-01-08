@@ -15,3 +15,5 @@ venv/
 .ipynb_checkpoints/
 /data_processed
 /runs
+/data_processed_387x516
+train_data_heatmap.html

@@ -5,23 +5,26 @@ from PIL import Image
 from tqdm import tqdm
 
 class GeolocalizationDataset(Dataset):
-  def __init__(self, image_paths, coordinates, use_dropout=False, use_dropout2d=False, is_train =False):
+  def __init__(self, image_paths, coordinates, target_size = (256, 192), is_train =False):
     self.image_paths = image_paths
     self.coordinates = coordinates
     self.image_tensors = []
 
+    self.target_size = target_size
+    
     print(f"Caching {len(image_paths)} images in RAM...")
     for path in tqdm(image_paths):
       with Image.open(path) as img:
         # Store as RGB Tensor in RAM to skip disk I/O later
-        tensor_img = T.ToTensor()(img.convert('RGB'))
+        img = img.resize((self.target_size[1], self.target_size[0])).convert('RGB')
+        tensor_img = T.ToTensor()(img)
         self.image_tensors.append(tensor_img)
 
     transformations = []
 
     if is_train:
-      transformations.append(T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5))
-      transformations.append(T.RandomGrayscale(p=0.2))
+      transformations.append(T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2))
+    #   transformations.append(T.RandomGrayscale(p=0.2))
         
 
     transformations.extend([

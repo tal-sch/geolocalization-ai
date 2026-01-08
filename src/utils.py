@@ -5,6 +5,9 @@ from PIL import Image, ExifTags
 import torchvision.transforms.functional as TF
 from torch.utils.tensorboard import SummaryWriter
 import contextily as cx
+import folium
+from folium.plugins import HeatMap
+import webbrowser
 
 # Function to extract GPS coordinates from image EXIF data
 def extractCoordinates(image_path):
@@ -135,17 +138,21 @@ def setup_TensorBoard_writers():
 
     return writer_train, writer_val
 
-def log_error_map(preds, trues,  epoch, num_points = 50, TB_writer = None):
+def log_error_map(preds, trues,  epoch, num_points = 25, TB_writer = None):
     fig, ax = plt.subplots(figsize=(8, 3))
     
+    # Limit to num_points for plotting
+    trues_plot = trues[:num_points]
+    preds_plot = preds[:num_points]
+    
     # plot true coordinates (Green) and predicted coordinates (Red)
-    ax.scatter(trues[:, 1], trues[:, 0], c='lime', label='True', alpha=0.8, s=30, edgecolors='black', zorder=2)
-    ax.scatter(preds[:, 1], preds[:, 0], c='red', label='Pred', alpha=0.8, s=30, edgecolors='black', zorder=2)
+    ax.scatter(trues_plot[:, 1], trues_plot[:, 0], c='lime', label='True', alpha=0.8, s=30, edgecolors='black', zorder=2)
+    ax.scatter(preds_plot[:, 1], preds_plot[:, 0], c='red', label='Pred', alpha=0.8, s=30, edgecolors='black', zorder=2)
     
     # draw lines between true and predicted points
-    for i in range(min(num_points, len(trues))):
-        ax.plot([trues[i, 1], preds[i, 1]], 
-                [trues[i, 0], preds[i, 0]], 'gray', alpha=0.3)
+    for i in range(len(trues_plot)):
+        ax.plot([trues_plot[i, 1], preds_plot[i, 1]], 
+                [trues_plot[i, 0], preds_plot[i, 0]], 'gray', alpha=0.3)
     
     ax.set_axis_off()
     ax.set_aspect('equal')
@@ -166,3 +173,24 @@ def log_error_map(preds, trues,  epoch, num_points = 50, TB_writer = None):
         plt.close(fig) 
     else:
         plt.show()
+
+
+def create_interactive_heatmap(coords, output_file='temp_heatmap.html'):
+
+    map_center = coords.mean(axis=0).tolist()
+    
+    #  Create a Folium Map centered around the average location
+    m = folium.Map(location=map_center, zoom_start=16, control_scale=True)
+    
+    # Prepare data for HeatMap
+    heat_data = coords.tolist()
+    
+    # Add HeatMap layer, customizing radius and blur for better visualization
+    HeatMap(heat_data, radius=15, blur=20, min_opacity=0.4).add_to(m)
+    
+    # Save the map to an HTML file
+    m.save(output_file)
+    print(f"Heatmap saved to {output_file}")
+    
+    # Automatically open in browser
+    webbrowser.open(output_file)
