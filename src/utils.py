@@ -107,7 +107,7 @@ def haversine_distance(coord1, coord2):
 def plot_images_from_dataloader(dataloader, num_images=10):
     # Get the first batch of images and labels
     data_iter = iter(dataloader)
-    images, labels = next(data_iter)
+    images, labels, zones = next(data_iter)
 
     # Move images to CPU for visualization
     images = images[:num_images].cpu()

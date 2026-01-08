@@ -187,43 +187,49 @@ class ConvNet3(nn.Module):
         out = self.regressor(out)
         return out
 
-class DINOGeoModel(nn.Module):
-    def __init__(self):
+class MultiTaskDINOGeo(nn.Module):
+    def __init__(self, num_zones):
         super().__init__()
         # Load Pre-trained DINOv2 Model
-        self.transformer = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
+        self.backbone = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
         
-        # Freeze DINOv2 Parameters apart from the head
-        for param in self.transformer.parameters():
+        # unfreeze the last block
+        for param in self.backbone.parameters():
             param.requires_grad = False
+        for param in self.backbone.blocks[-1].parameters():
+            param.requires_grad = True
+
+        # Keep final layernorm unfrozen
+        for param in self.backbone.norm.parameters():
+            param.requires_grad = True
             
-        # 2. Sophisticated Head (Inverse Bottleneck)
-        # Strategy: Expand -> Refine -> Contract
-        self.head = nn.Sequential(
-            # STEP 1: Expansion (Untangle features)
-            # We go from 384 -> 1024 to give the model "thinking room"
+        # Shared "Reasoning" Layer
+        self.shared = nn.Sequential(
             nn.Linear(384, 1024),
-            nn.LayerNorm(1024),      # Stabilizes the expanded features
-            nn.GELU(),               # Modern activation (better than ReLU)
-            nn.Dropout(0.3),         # Fight overfitting
-            
-            # STEP 2: Refinement (The "Reasoning" Layer)
+            nn.LayerNorm(1024),
+            nn.GELU(),
+            nn.Dropout(0.3)
+        )
+
+        # HEAD 1: Regression (Lat/Lon)
+        self.reg_head = nn.Sequential(
             nn.Linear(1024, 512),
-            nn.LayerNorm(512),
             nn.GELU(),
-            nn.Dropout(0.3),
-            
-            # STEP 3: Contraction (The Decision)
-            nn.Linear(512, 256),
+            nn.Linear(512, 2),
+            nn.Sigmoid()
+        )
+
+        # HEAD 2: Classification (Zone ID)
+        self.cls_head = nn.Sequential(
+            nn.Linear(1024, 512),
             nn.GELU(),
-            nn.Linear(256, 2),
-            nn.Sigmoid() # Bound outputs between [0, 1]
+            nn.Linear(512, num_zones) # Output: Probability for each zone
         )
 
     def forward(self, x):
-        # Get the features
-        features = self.transformer(x)
+        features = self.backbone(x)
+        shared_feat = self.shared(features)
         
-        # Pass through our custom regression head
-        output = self.head(features)
-        return output
+        coords = self.reg_head(shared_feat)
+        zones = self.cls_head(shared_feat)
+        return coords, zones

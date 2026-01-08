@@ -5,13 +5,14 @@ from PIL import Image
 from tqdm import tqdm
 
 class GeolocalizationDataset(Dataset):
-  def __init__(self, image_paths, coordinates, target_size = (256, 192), is_train =False):
+  def __init__(self, image_paths, coordinates, zone_labels, target_size = (256, 192), is_train =False):
     self.image_paths = image_paths
     self.coordinates = coordinates
+    self.zone_labels = zone_labels
     self.image_tensors = []
 
     self.target_size = target_size
-    
+
     print(f"Caching {len(image_paths)} images in RAM...")
     for path in tqdm(image_paths):
       with Image.open(path) as img:
@@ -23,8 +24,9 @@ class GeolocalizationDataset(Dataset):
     transformations = []
 
     if is_train:
-      transformations.append(T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2))
-    #   transformations.append(T.RandomGrayscale(p=0.2))
+      transformations.append(T.RandomGrayscale(p=0.2))
+      transformations.append(T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4))
+      transformations.append(T.RandomErasing(p=0.5, scale=(0.02, 0.2)))
         
 
     transformations.extend([
@@ -43,5 +45,6 @@ class GeolocalizationDataset(Dataset):
     image = self.transform(image)
 
     coord = torch.tensor(self.coordinates[idx], dtype=torch.float32)
+    zone = torch.tensor(self.zone_labels[idx], dtype=torch.long)
 
-    return image, coord
+    return image, coord, zone
