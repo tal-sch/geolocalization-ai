@@ -1,7 +1,17 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
+import torchvision.transforms as T
 
+import numpy as np
+from tqdm import tqdm
+
+import sys
+sys.path.append(r"D:\programming_projects\university\geolocalization-ai\LightGlue")
+from lightglue import LightGlue, SuperPoint
+
+import matplotlib.pyplot as plt
 
 class ConvNet(nn.Module):
     def __init__(self, use_dropout=False, use_dropout2d=False):
@@ -328,3 +338,111 @@ class MetricDINOGeo(nn.Module):
         pred_coords = self.reg_head(embedding)
         
         return embedding, pred_coords, backbone_features
+    
+
+class HierarchicalLocalizer:
+    def __init__(self, train_dataset):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.train_dataset = train_dataset
+        
+        print(f"Loading models on {self.device}...")
+        
+        # 1. Global Features (DINOv2) - Good at "What does it look like?"
+        self.global_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14').to(self.device)
+        self.global_model.eval()
+        self.dino_norm = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+        # 2. Local Features (LightGlue) - Good at "Do the shapes match?"
+        # Increased keypoints to 2048 for better detection in dark/complex scenes
+        self.extractor = SuperPoint(max_num_keypoints=2048).eval().to(self.device)
+        self.matcher = LightGlue(features='superpoint').eval().to(self.device)
+
+        self.to_grayscale = T.Grayscale() # superpoint works best on grayscale images
+
+        # 3. Build Index
+        self.db_descriptors, self.db_local_feats, self.db_gps = self.build_database_index()
+
+    def build_database_index(self):
+        loader = DataLoader(self.train_dataset, batch_size=32, shuffle=False, num_workers=0)
+
+        global_descs = []
+        local_feats_cache = []
+        gps_coords = []
+        
+        with torch.no_grad():
+            for images, coords in tqdm(loader, desc="Building Index"):
+                images = images.to(self.device, non_blocking=True)
+
+                # run DINO to get global descriptors 
+                dino_imgs = self.dino_norm(images)
+                g_desc = self.global_model(dino_imgs)
+                g_desc = g_desc / g_desc.norm(dim=-1, keepdim=True)
+                global_descs.append(g_desc.cpu())
+
+                # run SuperPoint to get local features
+                gray_imgs = self.to_grayscale(images)
+                
+                # Iterate through the batch manually
+                for i in range(gray_imgs.shape[0]):
+                    # Get single image (1, H, W) -> unsqueeze to (1, 1, H, W)
+                    single_img = gray_imgs[i].unsqueeze(0)
+                    
+                    # Extract features
+                    feats = self.extractor.extract(single_img)
+                    
+                    # Move to CPU to save VRAM
+                    # LightGlue returns tensors with batch dim 1, which is what we want to store
+                    feats_cpu = {k: v.cpu() for k, v in feats.items()}
+                    local_feats_cache.append(feats_cpu)
+                                
+                gps_coords.append(coords)
+
+        return torch.cat(global_descs), local_feats_cache, torch.cat(gps_coords)
+
+    def predict(self, query_img, top_k=20):
+        """
+        query_img: A single [C, H, W] tensor in [0, 1] range (RGB).
+        """
+        if query_img.dim() == 3:
+            query_img = query_img.unsqueeze(0) # Add batch dim
+        
+        query_img = query_img.to(self.device)
+
+        with torch.no_grad():
+            # extract global descriptor and normalize
+            dino_in = self.dino_norm(query_img)
+            query_vec = self.global_model(dino_in)
+            query_vec = query_vec / query_vec.norm(dim=-1, keepdim=True)
+            
+            # Compute similarities and retrieve top-k
+            sims = query_vec @ self.db_descriptors.to(self.device).t()
+            scores, indices = torch.topk(sims.squeeze(), top_k)
+            indices = indices.cpu().numpy()
+
+        best_idx = indices[0] # Default to best visual match
+        max_inliers = 0
+
+        with torch.no_grad():
+            gray_query = self.to_grayscale(query_img)
+            feats_query = self.extractor.extract(gray_query)
+
+        for idx in indices:
+            # retrieve pre-computed local features of top-k candidates
+            feats_cand = self.db_local_feats[idx]
+            
+            # Move candidate features to GPU for matching
+            feats_cand_gpu = {k: v.to(self.device) for k, v in feats_cand.items()}
+
+            # LightGlue Matcher
+            matches = self.matcher({'image0': feats_query, 'image1': feats_cand_gpu})
+            
+            # Count robust matches (inliers)
+            pruned = matches['matches'][0] # [0] because batch=1
+            count = len(pruned)
+
+            if count > max_inliers:
+                max_inliers = count
+                best_idx = idx  
+
+        # Return the matched image and its GPS coordinates
+        return self.train_dataset[best_idx], self.db_gps[best_idx].numpy(), max_inliers

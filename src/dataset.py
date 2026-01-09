@@ -5,7 +5,7 @@ from PIL import Image
 from tqdm import tqdm
 
 class GeolocalizationDataset(Dataset):
-  def __init__(self, image_paths, coordinates, target_size = (256, 192), is_train =False):
+  def __init__(self, image_paths, coordinates, target_size = (192, 256), is_train =False):
     self.image_paths = image_paths
     self.coordinates = coordinates
     self.image_tensors = []
@@ -16,23 +16,9 @@ class GeolocalizationDataset(Dataset):
     for path in tqdm(image_paths):
       with Image.open(path) as img:
         # Store as RGB Tensor in RAM to skip disk I/O later
-        img = img.resize((self.target_size[1], self.target_size[0])).convert('RGB')
+        img = img.resize((self.target_size[0], self.target_size[1])).convert('RGB')
         tensor_img = T.ToTensor()(img)
         self.image_tensors.append(tensor_img)
-
-    transformations = []
-
-    if is_train:
-      transformations.append(T.RandomGrayscale(p=0.2))
-      transformations.append(T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4))
-      transformations.append(T.RandomErasing(p=0.5, scale=(0.02, 0.2)))
-        
-
-    transformations.extend([
-      T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    self.transform = T.Compose(transformations)
 
 
   def __len__(self):
@@ -41,7 +27,6 @@ class GeolocalizationDataset(Dataset):
 
   def __getitem__(self, idx):
     image = self.image_tensors[idx]
-    image = self.transform(image)
 
     coord = torch.tensor(self.coordinates[idx], dtype=torch.float32)
 

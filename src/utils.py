@@ -116,7 +116,6 @@ def plot_images_from_dataloader(dataloader, num_images=10):
     fig, axes = plt.subplots(1, num_images, figsize=(20, 5))
     for i in range(num_images):
         img = images[i].permute(1, 2, 0).numpy()  # Convert from (C, H, W) to (H, W, C)
-        img = img * 0.229 + 0.485  # Unnormalize (mean and std from T.Normalize)
         img = img.clip(0, 1)  # Clip values to [0, 1] for display
 
         axes[i].imshow(img)
