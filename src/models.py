@@ -399,7 +399,7 @@ class HierarchicalLocalizer:
 
         return torch.cat(global_descs), local_feats_cache, torch.cat(gps_coords)
 
-    def predict(self, query_img, top_k=20):
+    def predict(self, query_img, top_k=20, top_n_matches=5, MIN_INLIER_THRESHOLD = 100, debug=False):
         """
         query_img: A single [C, H, W] tensor in [0, 1] range (RGB).
         """
@@ -420,11 +420,12 @@ class HierarchicalLocalizer:
             indices = indices.cpu().numpy()
 
         best_idx = indices[0] # Default to best visual match
-        max_inliers = 0
 
         with torch.no_grad():
             gray_query = self.to_grayscale(query_img)
             feats_query = self.extractor.extract(gray_query)
+
+        valid_matches = []
 
         for idx in indices:
             # retrieve pre-computed local features of top-k candidates
@@ -438,11 +439,41 @@ class HierarchicalLocalizer:
             
             # Count robust matches (inliers)
             pruned = matches['matches'][0] # [0] because batch=1
-            count = len(pruned)
+            inliers = len(pruned)
 
-            if count > max_inliers:
-                max_inliers = count
-                best_idx = idx  
+            if inliers > MIN_INLIER_THRESHOLD:
+                gps_cand = self.db_gps[idx].numpy()
+                valid_matches.append((gps_cand, inliers, idx))
 
-        # Return the matched image and its GPS coordinates
-        return self.train_dataset[best_idx], self.db_gps[best_idx].numpy(), max_inliers
+        if not valid_matches:
+            # No good matches found, return best visual match by dino
+            return self.db_gps[best_idx].numpy()
+        
+        valid_matches.sort(key=lambda x: x[1], reverse=True)
+        top_n_matches = valid_matches[:top_n_matches]
+        
+        total_weight = sum(m[1] for m in top_n_matches) # Sum of inlier counts
+        
+        weighted_lat = sum(m[0][0] * m[1] for m in top_n_matches) / total_weight # Latitude
+        weighted_lon = sum(m[0][1] * m[1] for m in top_n_matches) / total_weight # Longitude
+        
+        if debug:
+            # Plot the original image and the top N matches
+            fig, axes = plt.subplots(1, len(top_n_matches) + 1, figsize=(15, 5))
+
+            # Plot the query image
+            axes[0].imshow(query_img.squeeze(0).permute(1, 2, 0).cpu().numpy())
+            axes[0].set_title("Query Image")
+            axes[0].axis("off")
+
+            # Plot the top N matched images
+            for i, (gps, count, idx) in enumerate(top_n_matches):
+                matched_image = self.train_dataset[idx][0]  # Retrieve the image from the dataset
+                axes[i + 1].imshow(matched_image.permute(1, 2, 0).cpu().numpy())
+                axes[i + 1].set_title(f"({i + 1}) Inliers: {count}")
+                axes[i + 1].axis("off")
+
+            plt.tight_layout()
+            plt.show()
+        
+        return np.array([weighted_lat, weighted_lon], dtype=np.float32)
