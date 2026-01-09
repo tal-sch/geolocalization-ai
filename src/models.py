@@ -233,3 +233,98 @@ class MultiTaskDINOGeo(nn.Module):
         coords = self.reg_head(shared_feat)
         zones = self.cls_head(shared_feat)
         return coords, zones
+    
+def gated_contrastive_loss(embeddings, backbone_features, real_coords, margin=0.2):
+    """
+    student_embeddings: (Batch, 128) - The vector we are training
+    frozen_features:    (Batch, 384) - The raw DINO output (The "Truth" about similarity)
+    real_coords:        (Batch, 2)   - Normalized GPS
+    """
+    
+    # 1. Calculate GPS Distances (Physical)
+    gps_dist = torch.cdist(real_coords, real_coords)
+    # Define Physical Neighbors (e.g., < 10-15m). 
+    # 0.005 is roughly 0.5% of map width. Tune this if needed!
+    is_gps_neighbor = (gps_dist < 0.005).float()
+    
+    # 2. Calculate Visual Distances (Semantic Gate)
+    # Use the frozen features to decide if they "look" the same
+    frozen_norm = nn.functional.normalize(backbone_features, p=2, dim=1)
+    visual_dist = torch.cdist(frozen_norm, frozen_norm)
+    
+    # 0.5 is a standard threshold for Cosine Similarity distance
+    is_visual_neighbor = (visual_dist < 0.5).float()
+    
+    # 3. Create the "Gate"
+    # ONLY pull if physically close AND visually similar (e.g. both facing North)
+    is_positive_pair = is_gps_neighbor * is_visual_neighbor
+    
+    # 4. Calculate Student Embedding Distances (The ones we are training)
+    student_dist = torch.cdist(embeddings, embeddings)
+    
+    # 5. The Loss Calculation
+    # POSITIVE: Pull 'True' matches together
+    loss_pos = is_positive_pair * torch.pow(student_dist, 2)
+    
+    # NEGATIVE: Push 'Far' matches apart
+    # Note: We push apart anything that is physically far (regardless of visual similarity)
+    is_negative_pair = (1 - is_gps_neighbor)
+    loss_neg = is_negative_pair * torch.pow(torch.relu(margin - student_dist), 2)
+    
+    # Mask out self-comparisons (diagonal)
+    mask = torch.triu(torch.ones_like(gps_dist), diagonal=1)
+    
+    final_loss = (loss_pos + loss_neg) * mask
+    
+    # Normalize by non-zero pairs to avoid instability
+    return final_loss.sum() / (mask.sum() + 1e-6)
+
+class MetricDINOGeo(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.backbone = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
+        
+        # Freeze most of the Backbone
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+            
+        # Unfreeze ONLY the last block and Norm layer
+        # This allows adaptation to campus textures without losing "world knowledge"
+        for param in self.backbone.blocks[-1].parameters():
+            param.requires_grad = True
+        for param in self.backbone.norm.parameters():
+            param.requires_grad = True
+            
+        # 2. The Projector (The "Fingerprint Maker")
+        # Compresses 384 dims -> 128 dims. 
+        # This vector is what we will use for k-NN search.
+        self.projector = nn.Sequential(
+            nn.Linear(384, 768),
+            nn.LayerNorm(768),
+            nn.GELU(),
+            nn.Dropout(0.3),
+            nn.Linear(768, 128) 
+        )
+
+        # 3. Auxiliary Regression Head (The "Compass")
+        # We keep this ONLY to help the model learn global placement during training.
+        # We will IGNORE this output during final inference.
+        self.reg_head = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.GELU(),
+            nn.Linear(64, 2) 
+        )
+
+    def forward(self, x):
+        # 1. Get Raw Features (We need these for the Loss Gate)
+        backbone_features = self.backbone(x)
+        
+        # 2. Create Embedding
+        embedding = self.projector(backbone_features)
+        # Normalize to unit sphere (Critical for Contrastive Loss!)
+        embedding = nn.functional.normalize(embedding, p=2, dim=1)
+        
+        # 3. Predict Coords (Auxiliary)
+        pred_coords = self.reg_head(embedding)
+        
+        return embedding, pred_coords, backbone_features

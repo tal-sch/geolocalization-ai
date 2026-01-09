@@ -5,10 +5,9 @@ from PIL import Image
 from tqdm import tqdm
 
 class GeolocalizationDataset(Dataset):
-  def __init__(self, image_paths, coordinates, zone_labels, target_size = (256, 192), is_train =False):
+  def __init__(self, image_paths, coordinates, target_size = (256, 192), is_train =False):
     self.image_paths = image_paths
     self.coordinates = coordinates
-    self.zone_labels = zone_labels
     self.image_tensors = []
 
     self.target_size = target_size
@@ -45,6 +44,5 @@ class GeolocalizationDataset(Dataset):
     image = self.transform(image)
 
     coord = torch.tensor(self.coordinates[idx], dtype=torch.float32)
-    zone = torch.tensor(self.zone_labels[idx], dtype=torch.long)
 
-    return image, coord, zone
+    return image, coord
