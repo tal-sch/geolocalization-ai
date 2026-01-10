@@ -17,3 +17,5 @@ venv/
 /runs
 /data_processed_387x516
 train_data_heatmap.html
+clean_index.pt
+*.pt
