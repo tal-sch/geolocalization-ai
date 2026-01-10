@@ -8,7 +8,8 @@ import numpy as np
 from tqdm import tqdm
 
 import sys
-sys.path.append(r"D:\programming_projects\university\geolocalization-ai\LightGlue")
+sys.path.append(r"D:\programming_projects\university\geolocalization-ai\LightGlue") # git clone https://github.com/cvg/LightGlue.git
+
 from lightglue import LightGlue, SuperPoint
 
 import matplotlib.pyplot as plt
