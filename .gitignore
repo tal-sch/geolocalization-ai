@@ -19,3 +19,5 @@ venv/
 train_data_heatmap.html
 clean_index.pt
 *.pt
+/data_manual_gps
+/data_manual_gps_united
