@@ -138,7 +138,7 @@ def setup_TensorBoard_writers():
     return writer_train, writer_val
 
 def log_error_map(preds, trues,  epoch, num_points = 25, TB_writer = None):
-    fig, ax = plt.subplots(figsize=(8, 3))
+    fig, ax = plt.subplots(figsize=(12, 4))
     
     # Limit to num_points for plotting
     trues_plot = trues[:num_points]

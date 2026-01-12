@@ -9,10 +9,10 @@ from tqdm import tqdm
 
 import sys
 sys.path.append(r"D:\programming_projects\university\geolocalization-ai\LightGlue") # git clone https://github.com/cvg/LightGlue.git
-
 from lightglue import LightGlue, SuperPoint
 
 import matplotlib.pyplot as plt
+import contextily as cx
 
 class ConvNet(nn.Module):
     def __init__(self, use_dropout=False, use_dropout2d=False):
@@ -400,7 +400,7 @@ class HierarchicalLocalizer:
 
         return torch.cat(global_descs), local_feats_cache, torch.cat(gps_coords)
 
-    def predict(self, query_img, top_k=20, top_n_matches=5, MIN_INLIER_THRESHOLD = 100, debug=False):
+    def predict(self, query_img, top_k_dino=20, top_k_lightglue=5, MIN_INLIER_THRESHOLD = 100, debug=False, true_coords=None):
         """
         query_img: A single [C, H, W] tensor in [0, 1] range (RGB).
         """
@@ -417,7 +417,7 @@ class HierarchicalLocalizer:
             
             # Compute similarities and retrieve top-k
             sims = query_vec @ self.db_descriptors.to(self.device).t()
-            scores, indices = torch.topk(sims.squeeze(), top_k)
+            scores, indices = torch.topk(sims.squeeze(), top_k_dino)
             indices = indices.cpu().numpy()
 
         best_idx = indices[0] # Default to best visual match
@@ -451,30 +451,184 @@ class HierarchicalLocalizer:
             return self.db_gps[best_idx].numpy()
         
         valid_matches.sort(key=lambda x: x[1], reverse=True)
-        top_n_matches = valid_matches[:top_n_matches]
+        top_k_lightglue_matches = valid_matches[:top_k_lightglue]
         
-        total_weight = sum(m[1] for m in top_n_matches) # Sum of inlier counts
+        total_weight = sum(m[1] for m in top_k_lightglue_matches) # Sum of inlier counts
         
-        weighted_lat = sum(m[0][0] * m[1] for m in top_n_matches) / total_weight # Latitude
-        weighted_lon = sum(m[0][1] * m[1] for m in top_n_matches) / total_weight # Longitude
+        weighted_lat = sum(m[0][0] * m[1] for m in top_k_lightglue_matches) / total_weight # Latitude
+        weighted_lon = sum(m[0][1] * m[1] for m in top_k_lightglue_matches) / total_weight # Longitude
         
-        if debug:
-            # Plot the original image and the top N matches
-            fig, axes = plt.subplots(1, len(top_n_matches) + 1, figsize=(15, 5))
-
-            # Plot the query image
-            axes[0].imshow(query_img.squeeze(0).permute(1, 2, 0).cpu().numpy())
-            axes[0].set_title("Query Image")
-            axes[0].axis("off")
-
-            # Plot the top N matched images
-            for i, (gps, count, idx) in enumerate(top_n_matches):
-                matched_image = self.train_dataset[idx][0]  # Retrieve the image from the dataset
-                axes[i + 1].imshow(matched_image.permute(1, 2, 0).cpu().numpy())
-                axes[i + 1].set_title(f"({i + 1}) Inliers: {count}")
-                axes[i + 1].axis("off")
-
-            plt.tight_layout()
-            plt.show()
+        if debug and true_coords is not None:
+            self.visualize_matches(query_img, top_k_lightglue_matches, (weighted_lat, weighted_lon), true_coords)
         
         return np.array([weighted_lat, weighted_lon], dtype=np.float32)
+
+    def validate(self, val_loader, top_k_dino=20, top_k_lightglue=5, inlier_threshold=100, debug=False):
+            """
+            Efficient validation loop using Weighted Interpolation.
+            
+            Args:
+                top_k_dino: How many candidates to retrieve globally.
+                top_k_lightglue: How many best matches to use for interpolation.
+                inlier_threshold: Min matches to accept a candidate for interpolation.
+            """
+            print(f"\n--- Starting Validation on {len(val_loader.dataset)} images ---")
+            
+            # 1. Set Evaluation Mode
+            self.global_model.eval()
+            self.extractor.eval()
+            self.matcher.eval()
+            
+            # 2. Pre-load Database Descriptors to GPU (Optimization)
+            # We do this ONCE, not every iteration
+            db_desc_gpu = self.db_descriptors.to(self.device)
+            
+            results = [] # Stores (Error_Meters, Pred_Lat, Pred_Lon, Gt_Lat, Gt_Lon)
+            
+            # Haversine Distance Helper
+            def haversine_np(lat1, lon1, lat2, lon2):
+                R = 6371000
+                phi1, phi2 = np.radians(lat1), np.radians(lat2)
+                dphi = np.radians(lat2 - lat1)
+                dlambda = np.radians(lon2 - lon1)
+                a = np.sin(dphi/2)**2 + np.cos(phi1)*np.cos(phi2)*np.sin(dlambda/2)**2
+                c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+                return R * c
+
+            pbar = tqdm(val_loader, desc="Validating", unit="batch")
+            with torch.no_grad():
+                for images, gt_coords in pbar:
+                    images = images.to(self.device)
+                    batch_size = images.shape[0]
+                    
+                    # --- A. Global Search (Batched for Speed) ---
+                    dino_in = self.dino_norm(images)
+                    query_vecs = self.global_model(dino_in)
+                    query_vecs = query_vecs / query_vecs.norm(dim=-1, keepdim=True)
+                    
+                    # Matrix Mult: [Batch, Dim] @ [Dim, DB_Size] -> [Batch, DB_Size]
+                    sims = query_vecs @ db_desc_gpu.t()
+                    topk_scores, topk_indices = torch.topk(sims, k=top_k_dino)
+                    topk_indices = topk_indices.cpu().numpy()
+                    
+                    # --- B. Geometric Verification (Per Query) ---
+                    for b in range(batch_size):
+                        # 1. Extract Local Features for Query ONCE
+                        q_img = images[b].unsqueeze(0) # [1, C, H, W]
+                        gray_q = self.to_grayscale(q_img)
+                        feats_q = self.extractor.extract(gray_q) # Cached on GPU
+                        
+                        candidates = topk_indices[b]
+                        valid_matches = []
+                        
+                        # 2. Check Candidates
+                        for db_idx in candidates:
+                            # Fetch DB features (move to GPU on demand)
+                            feats_db = {k: v.to(self.device) for k, v in self.db_local_feats[db_idx].items()}
+                            
+                            # Match
+                            matches = self.matcher({'image0': feats_q, 'image1': feats_db})
+                            inliers = len(matches['matches'][0])
+                            
+                            if inliers >= inlier_threshold:
+                                gps_cand = self.db_gps[db_idx].numpy()
+                                valid_matches.append((gps_cand, inliers))
+                        
+                        # --- C. Weighted Interpolation ---
+                        if not valid_matches:
+                            # Fallback: Top-1 DINO match
+                            pred_gps = self.db_gps[candidates[0]].numpy()
+                        else:
+                            # Sort by inliers (descending)
+                            valid_matches.sort(key=lambda x: x[1], reverse=True)
+                            
+                            # Take top N best geometric matches
+                            top_n = valid_matches[:top_k_lightglue]
+                            
+                            # Weighted Average
+                            total_w = sum(m[1] for m in top_n)
+                            w_lat = sum(m[0][0] * m[1] for m in top_n) / total_w
+                            w_lon = sum(m[0][1] * m[1] for m in top_n) / total_w
+                            pred_gps = np.array([w_lat, w_lon])
+                        
+                        # --- D. Calculate Error ---
+                        gt = gt_coords[b].numpy()
+                        err = haversine_np(pred_gps[0], pred_gps[1], gt[0], gt[1])
+                        results.append((err, pred_gps[0], pred_gps[1], gt[0], gt[1]))
+                        pbar.set_postfix({'Last Err (m)': f"{err:.2f}",
+                                           'Avg Err (m)': f"{np.mean([r[0] for r in results]):.2f}",
+                                           'Med Err (m)': f"{np.median([r[0] for r in results]):.2f}",
+                                           'Max Err (m)': f"{np.max([r[0] for r in results]):.2f}"})
+                        if debug:
+                            self.visualize_matches(q_img, top_n, pred_gps, gt)
+
+                        
+
+            # --- Report Statistics ---
+            errors = np.array([r[0] for r in results])
+            print(f"\nResults Summary:")
+            print(f"Mean Error:   {np.mean(errors):.2f}m")
+            print(f"Median Error: {np.median(errors):.2f}m")
+            print(f"Max Error:    {np.max(errors):.2f}m")
+            print(f"Accuracy < 5m:  {np.mean(errors < 5.0) * 100:.1f}%")
+            print(f"Accuracy < 10m: {np.mean(errors < 10.0) * 100:.1f}%")
+            print(f"Accuracy < 25m: {np.mean(errors < 25.0) * 100:.1f}%")
+            
+            return results
+
+    def visualize_matches(self, query_img, top_k_matches, weighted_coords, true_coords=None):
+        if not top_k_matches:
+            return
+
+        weighted_lat, weighted_lon = weighted_coords
+
+        # Plot the original image and the top N matches
+        fig, axes = plt.subplots(1, len(top_k_matches) + 1, figsize=(15, 5))
+        
+        # Plot the query image
+        img_to_plot = query_img.squeeze(0) if query_img.dim() == 4 else query_img
+        axes[0].imshow(img_to_plot.permute(1, 2, 0).cpu().numpy())
+        axes[0].set_title("Query Image")
+        axes[0].axis("off")
+
+        # Plot the top N matched images
+        for i, (gps, count, idx) in enumerate(top_k_matches):
+            matched_image = self.train_dataset[idx][0]  # Retrieve the image from the dataset
+            axes[i + 1].imshow(matched_image.permute(1, 2, 0).cpu().numpy())
+            axes[i + 1].set_title(f"({i + 1}) Inliers: {count}")
+            axes[i + 1].axis("off")
+
+        plt.tight_layout()
+        plt.show()
+
+        # Plot the top k LightGlue match coordinates, weighted average, and true coordinate
+        fig, ax = plt.subplots(figsize=(8, 3))
+
+        # Extract top k LightGlue match coordinates
+        match_coords = np.array([m[0] for m in top_k_matches])
+        match_inliers = [m[1] for m in top_k_matches]
+
+        if true_coords is not None:
+            # Plot true coordinate (Green)
+            ax.scatter(true_coords[1], true_coords[0], c='lime', label='True', alpha=0.8, s=50, edgecolors='black', zorder=3)
+
+        # Plot weighted average coordinate (Red)
+        ax.scatter(weighted_lon, weighted_lat, c='red', label='Weighted Avg', alpha=0.8, s=50, edgecolors='black', zorder=3)
+
+        # Plot top k LightGlue match coordinates 
+        for coord, inlier_count in zip(match_coords, match_inliers):
+            ax.scatter(coord[1], coord[0], c='blue', alpha=0.6, s=50, edgecolors='black', zorder=2, label='Matches' if 'Matches' not in ax.get_legend_handles_labels()[1] else "")
+            ax.text(coord[1], coord[0], f'{inlier_count}', fontsize=8, ha='center', va='center', color='black', zorder=3)
+
+        ax.set_axis_off()
+        ax.set_aspect('equal')
+        plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
+        ax.margins(0, 0)
+
+        try:
+            cx.add_basemap(ax, crs='EPSG:4326', source=cx.providers.OpenStreetMap.Mapnik, alpha=1.0, reset_extent=False, zoom=19)
+        except Exception as e:
+            print(f"Could not fetch map tiles: {e}")
+
+        ax.legend(loc='upper right')
+        plt.show()
