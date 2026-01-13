@@ -135,17 +135,21 @@ def setup_TensorBoard_writers():
 
     return writer_train, writer_val
 
-def log_error_map(preds, trues,  epoch, num_points = 50, TB_writer = None):
-    fig, ax = plt.subplots(figsize=(8, 3))
+def log_error_map(preds, trues,  epoch, num_points = 25, TB_writer = None):
+    fig, ax = plt.subplots(figsize=(12, 4))
+    
+    # Limit to num_points for plotting
+    trues_plot = trues[:num_points]
+    preds_plot = preds[:num_points]
     
     # plot true coordinates (Green) and predicted coordinates (Red)
-    ax.scatter(trues[:, 1], trues[:, 0], c='lime', label='True', alpha=0.8, s=30, edgecolors='black', zorder=2)
-    ax.scatter(preds[:, 1], preds[:, 0], c='red', label='Pred', alpha=0.8, s=30, edgecolors='black', zorder=2)
+    ax.scatter(trues_plot[:, 1], trues_plot[:, 0], c='lime', label='True', alpha=0.8, s=30, edgecolors='black', zorder=2)
+    ax.scatter(preds_plot[:, 1], preds_plot[:, 0], c='red', label='Pred', alpha=0.8, s=30, edgecolors='black', zorder=2)
     
     # draw lines between true and predicted points
-    for i in range(min(num_points, len(trues))):
-        ax.plot([trues[i, 1], preds[i, 1]], 
-                [trues[i, 0], preds[i, 0]], 'gray', alpha=0.3)
+    for i in range(len(trues_plot)):
+        ax.plot([trues_plot[i, 1], preds_plot[i, 1]], 
+                [trues_plot[i, 0], preds_plot[i, 0]], 'gray', alpha=0.3)
     
     ax.set_axis_off()
     ax.set_aspect('equal')
