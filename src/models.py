@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
-from transformers import CLIPVisionModel
+from transformers import CLIPVisionModel, ConvNextModel
+from transformers import AutoModel, AutoConfig
 
 
 class ConvNet(nn.Module):
@@ -191,38 +192,58 @@ class ConvNet3(nn.Module):
 
 
 class PretrainedResNet(nn.Module):
-    def __init__(self, use_dropout=True):
-        super(PretrainedResNet, self).__init__()
+    def __init__(self, dropout_rate=0.5):
+        super().__init__()
+        self.model_name = "resnet50"
         
-        # 1. Load the Pretrained Beast
-        # "DEFAULT" downloads the best available weights (ImageNet)
-        weights = models.ResNet50_Weights.DEFAULT
+        # 1. Load Standard ResNet50
+        # We use the default weights (IMAGENET1K_V2 is the modern standard)
+        weights = models.ResNet50_Weights.IMAGENET1K_V2
         self.backbone = models.resnet50(weights=weights)
         
-        # 2. (Optional) Freeze early layers
-        # This prevents the model from forgetting "basic vision" during the first few epochs.
-        # We freeze everything initially.
+        # 2. Freeze Backbone
         for param in self.backbone.parameters():
             param.requires_grad = False
             
-        # 3. Replace the Standard Pooling with GeM (The SOTA upgrade)
-        # ResNet's "avgpool" is usually just an AdaptiveAvgPool2d
-        self.backbone.avgpool = GeM() 
-        
-        # 4. Replace the Classification Head (fc)
-        # ResNet50 outputs 2048 features before the final layer
+        # 3. Replace the Head
+        # ResNet's final layer is called 'fc' and has 2048 input features
         num_features = self.backbone.fc.in_features
         
+        # Replace 'fc' with our regression head
         self.backbone.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(num_features, 1024),
-            nn.SiLU(),             # Modern Activation
-            nn.Dropout(0.7 if use_dropout else 0.0),
-            nn.Linear(1024, 512),
-            nn.SiLU(),
-            nn.Dropout(0.7 if use_dropout else 0.0),
-            nn.Linear(512, 2)      # [Latitude, Longitude]
+            nn.Linear(num_features, 512),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(256, 2)  # Lat/Lon
         )
+
+    def forward(self, x):
+        # ResNet is simple: just pass x through
+        return self.backbone(x)
+
+    def unfreeze_last_layers(self, num_layers=2):
+        print(f"🔓 Unfreezing last {num_layers} blocks for ResNet50...")
+        
+        # ResNet structure: layer1, layer2, layer3, layer4
+        # We unfreeze from the end backwards
+        
+        layers_to_unfreeze = []
+        
+        if num_layers >= 1: layers_to_unfreeze.append(self.backbone.layer4)
+        if num_layers >= 2: layers_to_unfreeze.append(self.backbone.layer3)
+        if num_layers >= 3: layers_to_unfreeze.append(self.backbone.layer2)
+        if num_layers >= 4: layers_to_unfreeze.append(self.backbone.layer1)
+            
+        for block in layers_to_unfreeze:
+            for param in block.parameters():
+                param.requires_grad = True
+                
+        # Always ensure head (fc) is unfrozen
+        for param in self.backbone.fc.parameters():
+            param.requires_grad = True
 
     def forward(self, x):
         return self.backbone(x)
@@ -244,62 +265,64 @@ class PretrainedResNet(nn.Module):
 
 
 
-class GeoDINOv2(nn.Module):
-    def __init__(self, dropout_rate=0.7): # High dropout for the head
-        super(GeoDINOv2, self).__init__()
+class GeoDINO(nn.Module):
+    def __init__(self, model_name="facebook/dinov2-base", dropout_rate=0.5):
+        super().__init__()
+        print(f"Loading DINOv2 Backbone: {model_name}...")
         
-        # 1. Load DINOv2 Small (Lightweight, massive intelligence)
-        # We load from Torch Hub. It downloads automatically.
-        print("Loading DINOv2-Small...")
-        self.backbone = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
+        # 1. Load DINOv2 (AutoModel handles the architecture)
+        self.backbone = AutoModel.from_pretrained(model_name)
         
-        # 2. FREEZE THE BACKBONE (Critical for small datasets)
-        # We trust DINO's features more than we trust our training loop.
+        # Get hidden size (768 for Base, 384 for Small, 1024 for Large)
+        self.embed_dim = self.backbone.config.hidden_size
+        
+        # 2. Regression Head
+        # SWITCHED to LayerNorm to match CLIP (Better for Transformer embeddings)
+        self.head = nn.Sequential(
+            nn.Linear(self.embed_dim, 512),
+            nn.LayerNorm(512),
+            nn.GELU(),
+            nn.Dropout(dropout_rate),
+            
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
+            nn.GELU(),
+            nn.Dropout(dropout_rate),
+            
+            nn.Linear(256, 2) # Lat/Lon
+        )
+        
+        # Freeze backbone initially
         for param in self.backbone.parameters():
             param.requires_grad = False
             
-        # 3. GeM Pooling 
-        # DINOv2-Small outputs 384 dimensions.
-        self.pooling = GeM(p=3.0)
-        
-        # 4. Regression Head
-        self.head = nn.Sequential(
-            nn.Linear(384, 1024),
-            nn.SiLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(1024, 512),
-            nn.SiLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(512, 2) # Lat/Lon
-        )
-
     def forward(self, x):
-        # DINOv2 requires image sides to be multiples of 14.
-        # Ensure your dataset resizes to (224, 294) or (224, 224).
+        # DINOv2 outputs a sequence of features
+        outputs = self.backbone(x)
         
-        # Forward pass through backbone
-        # We want the "patch tokens", not the CLS token.
-        features = self.backbone.forward_features(x)
-        patch_tokens = features['x_norm_patchtokens'] # Shape: (Batch, N_Patches, 384)
+        # We take the [CLS] token (Index 0) which represents the whole image
+        cls_token = outputs.last_hidden_state[:, 0, :]
         
-        # Reshape for GeM: (Batch, Channels, H, W)
-        B, N, C = patch_tokens.shape
-        # Calculate H and W dynamically based on input aspect ratio
-        # (Assuming input H, W were valid multiples of 14)
-        H_patches = int(x.shape[2] / 14)
-        W_patches = int(x.shape[3] / 14)
+        return self.head(cls_token)
+
+    def unfreeze_last_layers(self, num_layers=2):
+        print(f"🔓 Unfreezing last {num_layers} layers for DINOv2...")
+        # DINOv2 uses a standard transformer encoder structure
+        encoder_layers = self.backbone.encoder.layer
         
-        # Reshape to spatial grid
-        spatial_features = patch_tokens.permute(0, 2, 1).reshape(B, C, H_patches, W_patches)
+        if num_layers > 0:
+            for layer in encoder_layers[-num_layers:]:
+                for param in layer.parameters():
+                    param.requires_grad = True
         
-        # Apply GeM and Head
-        pooled = self.pooling(spatial_features).flatten(1)
-        return self.head(pooled)
+        # Always unfreeze head
+        for param in self.head.parameters():
+            param.requires_grad = True
     
 
 
 class GeoCLIP(nn.Module):
-    def __init__(self, dropout_rate=0.4, model_name="openai/clip-vit-base-patch16"):
+    def __init__(self, dropout_rate=0.4, model_name="openai/clip-vit-base-patch32"):
         super(GeoCLIP, self).__init__()
         
         print(f"Loading {model_name}...")
@@ -312,7 +335,7 @@ class GeoCLIP(nn.Module):
         # Get embedding dimension (768 for base, 512 for patch32)
         embed_dim = self.backbone.config.hidden_size
         
-        # Regression head - keep it simple
+        # Regression head
         self.head = nn.Sequential(
             nn.Linear(embed_dim, 512),
             nn.LayerNorm(512),
@@ -331,12 +354,94 @@ class GeoCLIP(nn.Module):
         # Get pooled output (CLS token representation)
         outputs = self.backbone(pixel_values=x)
         pooled = outputs.pooler_output  # (Batch, embed_dim)
+        return self.head(pooled)
+    
+    def unfreeze_last_layers(self, num_layers=2):
+        print(f"🔓 Unfreezing last {num_layers} layers for CLIP...")
+        
+        # CLIPVisionModel wraps the actual model in .vision_model
+        # Path: self.backbone.vision_model.encoder.layers
+        layers = self.backbone.vision_model.encoder.layers
+        
+        for layer in layers[-num_layers:]:
+            for param in layer.parameters():
+                param.requires_grad = True
+                
+        # Always unfreeze head
+        for param in self.head.parameters():
+            param.requires_grad = True
+
+
+    
+class GeoConvNeXt(nn.Module):
+    def __init__(self, model_name="facebook/convnext-base-224", dropout_rate=0.5):
+        super().__init__()
+        print(f"Loading ConvNeXt: {model_name}...")
+        
+        # Load ConvNeXt backbone
+        self.backbone = ConvNextModel.from_pretrained(model_name)
+        
+        # Get the hidden size from config
+        # ConvNeXt outputs (batch, hidden_size, H, W)
+        # We need to pool spatially and get a single vector
+        self.embed_dim = self.backbone.config.hidden_sizes[-1]  # Last layer channels
+        
+        # Global Average Pooling (will be applied in forward)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        
+        # Regression head
+        self.head = nn.Sequential(
+            nn.Linear(self.embed_dim, 512),
+            nn.LayerNorm(512),
+            nn.GELU(),
+            nn.Dropout(dropout_rate),
+            
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
+            nn.GELU(),
+            nn.Dropout(dropout_rate),
+            
+            nn.Linear(256, 2)  # Lat/Lon
+        )
+        
+        # Freeze backbone initially
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+            
+    def forward(self, x):
+        # Get ConvNeXt features
+        outputs = self.backbone(x)
+        
+        # outputs.last_hidden_state shape: (batch, hidden_size, H, W)
+        features = outputs.last_hidden_state
+        
+        # Global average pooling
+        pooled = self.pool(features)  # (batch, hidden_size, 1, 1)
+        pooled = pooled.flatten(1)     # (batch, hidden_size)
         
         return self.head(pooled)
     
     def unfreeze_last_layers(self, num_layers=2):
-        """Optional: unfreeze last transformer blocks for fine-tuning"""
-        print(f"Unfreezing last {num_layers} transformer layers...")
-        for layer in self.backbone.vision_model.encoder.layers[-num_layers:]:
-            for param in layer.parameters():
+        """
+        ConvNeXt has 4 stages. Unfreeze from the end backwards.
+        num_layers=2 means unfreeze stages 3 and 4
+        num_layers=4 means unfreeze all stages
+        """
+        print(f"🔓 Unfreezing last {num_layers} stages for ConvNeXt...")
+        
+        # ConvNeXt structure: encoder.stages[0], [1], [2], [3]
+        stages = self.backbone.encoder.stages
+        
+        # Unfreeze from the end
+        stages_to_unfreeze = stages[-num_layers:] if num_layers < len(stages) else stages
+        
+        for stage in stages_to_unfreeze:
+            for param in stage.parameters():
                 param.requires_grad = True
+        
+        # Always unfreeze head
+        for param in self.head.parameters():
+            param.requires_grad = True
+
+
+            

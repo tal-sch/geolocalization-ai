@@ -10,61 +10,90 @@ import numpy as np
 from src.models import GeoCLIP
 
 
-class GeoCLIPEnsemble:
-    """
-    Ensemble of multiple GeoCLIP models for improved predictions
-    """
-    def __init__(self, model_paths, device='cuda'):
+import torch
+import numpy as np
+from src.models import GeoCLIP, GeoDINO, PretrainedResNet  # Ensure these are imported
+
+class GeoEnsemble:
+    def __init__(self, model_configs, device, weights=None):
         self.models = []
         self.device = device
         
-        for path in model_paths:
-            model = GeoCLIP(
-                dropout_rate=0.4,
-                model_name="openai/clip-vit-large-patch14",
-                use_attention=True,
-                use_multitask=False  # Disable for inference
-            ).to(device)
-            
-            model.load_state_dict(torch.load(path))
-            model.eval()
-            self.models.append(model)
-        
-        print(f"Loaded {len(self.models)} models for ensemble")
-    
-    def predict(self, x):
-        """Average predictions from all models"""
-        predictions = []
-        
-        with torch.no_grad():
-            for model in self.models:
-                pred = model(x)
-                predictions.append(pred.cpu().numpy())
-        
-        return torch.tensor(np.mean(predictions, axis=0))
-    
-    def predict_with_tta(self, x, num_augments=5):
-        """Test-Time Augmentation + Ensemble"""
-        import torchvision.transforms as T
-        
-        all_predictions = []
-        
-        # Original image
-        all_predictions.append(self.predict(x).numpy())
-        
-        # Augmented versions
-        tta_transform = T.Compose([
-            T.RandomAffine(degrees=5, translate=(0.03, 0.03)),
-            T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)
-        ])
-        
-        for _ in range(num_augments - 1):
-            # Apply augmentation to each image in batch
-            aug_batch = torch.stack([tta_transform(img) for img in x])
-            all_predictions.append(self.predict(aug_batch).numpy())
-        
-        return torch.tensor(np.mean(all_predictions, axis=0))
+        # Handle Weights
+        if weights is not None:
+            # Normalize just in case
+            weights = np.array(weights)
+            weights = weights / weights.sum()
+            self.weights = torch.tensor(weights, device=device, dtype=torch.float32)
+            print(f"⚖️ Ensemble Weights Set: {self.weights.cpu().numpy()}")
+        else:
+            self.weights = None
+            print("⚖️ Ensemble Weights: None (Equal Voting)")
 
+        print(f"🧩 Initializing Ensemble with {len(model_configs)} models...")
+        
+        for config in model_configs:
+            m_type = config['type']
+            m_name = config['name']
+            m_path = config['path']
+            # Get dropout (Critical for correct architecture init)
+            m_drop = config.get('dropout', 0.5) 
+            
+            # 1. Instantiate
+            if m_type == "CLIP":
+                model = GeoCLIP(dropout_rate=m_drop, model_name=m_name)
+            elif m_type == "DINO":
+                model = GeoDINO(dropout_rate=m_drop, model_name=m_name)
+            
+            # 2. Load Weights
+            print(f"   -> Loading {m_type} (Drop={m_drop}) from {m_path}...")
+            state_dict = torch.load(m_path, map_location=device)
+            model.load_state_dict(state_dict)
+            
+            # 3. Optimize
+            model.to(device)
+            model.eval()
+            if "RTX" in torch.cuda.get_device_name(0):
+                model = model.to(memory_format=torch.channels_last)
+                
+            self.models.append(model)
+            
+    def predict(self, images):
+        if images.device != self.device:
+            images = images.to(self.device)
+            
+        with torch.no_grad():
+            # 1. Get Individual Predictions
+            # We assume Model 0 is CLIP, Model 1 is DINO (based on your config order)
+            p_clip = self.models[0](images) 
+            p_dino = self.models[1](images) 
+
+            # 2. Calculate Disagreement (Euclidean Distance in Normalized Space)
+            # (Batch_Size,) tensor of distances
+            disagreement = torch.norm(p_clip - p_dino, dim=1)
+            
+            # 3. Define Threshold (0.15 normalized is roughly ~200-300m in real world depending on scale)
+            # You might need to tune this. Start with 0.15.
+            veto_threshold = 0.15 
+            
+            # 4. Create Decision Mask
+            # 1.0 if they disagree (Trust DINO only), 0.0 if they agree (Average)
+            mask = (disagreement > veto_threshold).float().unsqueeze(1)
+            
+            # 5. Calculate Standard Weighted Average
+            stacked = torch.stack([p_clip, p_dino])
+            if self.weights is None:
+                weighted_avg = torch.mean(stacked, dim=0)
+            else:
+                w = self.weights.view(-1, 1, 1) 
+                weighted_avg = (stacked * w).sum(dim=0)
+
+            # 6. Final Decision: 
+            # If mask is 1 (High Disagreement) -> Take p_dino
+            # If mask is 0 (Low Disagreement)  -> Take weighted_avg
+            final_pred = (mask * p_dino) + ((1 - mask) * weighted_avg)
+            
+            return final_pred
 
 # ============================================================================
 # HELPER FUNCTIONS

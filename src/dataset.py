@@ -21,7 +21,6 @@ class GeolocalizationDataset(Dataset):
 
     if is_train:
       self.transform = T.Compose([
-          T.RandomAffine(degrees=0, translate=(0.05, 0.05), scale=(0.95, 1.05)),
           T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3),
           T.RandomGrayscale(p=0.1),
           T.Normalize(

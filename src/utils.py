@@ -2,9 +2,11 @@ from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image, ExifTags
+import torch
 import torchvision.transforms.functional as TF
 from torch.utils.tensorboard import SummaryWriter
 import contextily as cx
+import torch.nn as nn
 
 # Function to extract GPS coordinates from image EXIF data
 def extractCoordinates(image_path):
@@ -185,3 +187,53 @@ def local_meters_to_latlon(x, y, lat0, lon0):
     lat = lat0 + (y / R) * (180 / np.pi)
     lon = lon0 + (x / (R * np.cos(np.radians(lat0)))) * (180 / np.pi)
     return lat, lon
+
+
+# --- HELPER 1: Get Backbone Layers Safely (CLIP vs DINO) ---
+def get_backbone_layers(model):
+    # CLIP uses 'vision_model', DINO uses 'encoder'
+    if hasattr(model.backbone, 'vision_model'): 
+        return model.backbone.vision_model.encoder.layers
+    elif hasattr(model.backbone, 'encoder'):    
+        return model.backbone.encoder.layer
+    else:
+        raise AttributeError(f"Unknown backbone structure")
+
+# --- HELPER 2: Get Head Params Safely (Regressor vs Head) ---
+def get_head_params(model):
+    if hasattr(model, 'regressor'): return model.regressor.parameters()
+    if hasattr(model, 'head'):      return model.head.parameters()
+    raise AttributeError("Model has neither 'regressor' nor 'head'")
+
+import torch
+import torch.nn as nn
+import math
+
+class GeoMetersLoss(nn.Module):
+    """
+    Computes mean geodesic distance (meters) between predicted and true lat/lon.
+    Inputs are in DEGREES.
+    """
+    def __init__(self):
+        super().__init__()
+        self.R = 6371000.0  # Earth radius in meters
+
+    def forward(self, pred, target):
+        # pred, target: (B, 2) -> [lat, lon] in degrees
+        lat1 = torch.deg2rad(pred[:, 0])
+        lon1 = torch.deg2rad(pred[:, 1])
+        lat2 = torch.deg2rad(target[:, 0])
+        lon2 = torch.deg2rad(target[:, 1])
+
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+
+        a = torch.sin(dlat / 2) ** 2 + \
+            torch.cos(lat1) * torch.cos(lat2) * torch.sin(dlon / 2) ** 2
+
+        c = 2 * torch.atan2(torch.sqrt(a), torch.sqrt(1 - a))
+        d = self.R * c
+
+        return d.mean()
+
+
