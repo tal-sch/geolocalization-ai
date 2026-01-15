@@ -17,3 +17,7 @@ venv/
 /runs
 /data_processed_387x516
 train_data_heatmap.html
+/data_manual_gps
+/data_manual_gps_united
+/data_processed_CLIP
+/data_processed_manual_gps
