@@ -233,28 +233,37 @@ class MultiTaskDINOGeo(nn.Module):
         coords = self.reg_head(shared_feat)
         zones = self.cls_head(shared_feat)
         return coords, zones
-    
-    def unfreeze_step(self, epoch, interval=15):
-        """
-        Progressively unfreezes DINOv2 blocks.
-        Returns True if a new block was unfrozen this epoch.
-        """
-        blocks_to_unfreeze = epoch // interval
-        did_unfreeze = False
-        
-        # DINO ViT-S has 12 blocks (0-11)
-        for i in range(1, blocks_to_unfreeze + 1):
-            target_block_idx = 11 - i
-            if target_block_idx >= 0:
-                block = self.backbone.blocks[target_block_idx]
-                # Check the first parameter of the block
-                if not next(block.parameters()).requires_grad:
-                    for param in block.parameters():
-                        param.requires_grad = True
-                    print(f"[{type(self).__name__}] Unfrozen Block {target_block_idx} at Epoch {epoch}")
-                    did_unfreeze = True
-        return did_unfreeze
 
-    def get_learnable_params(self):
-        """Utility to return only params that require gradients for the optimizer."""
-        return [p for p in self.parameters() if p.requires_grad]
+    def unfreeze_step(self, blocks_per_step=2):
+        """
+        Smart Unfreezing:
+        1. Checks what is currently frozen.
+        2. Unfreezes the next 'blocks_per_step' layers.
+        3. Returns True if successful, False if the whole model is already open.
+        """
+        #todo: refactor to avoid code duplication with training script
+        
+        # check if the first block is already unfrozen - all blocks are unfrozen
+        if next(self.backbone.blocks[0].parameters()).requires_grad:
+            return False 
+
+        # find the first frozen block from the end
+        first_frozen_idx = -1
+        for i in range(11, -1, -1):
+            if not next(self.backbone.blocks[i].parameters()).requires_grad:
+                first_frozen_idx = i
+                break
+        
+        if first_frozen_idx == -1: # all blocks are unfrozen
+            return False 
+
+        # calculate block indices to unfreeze
+        target_idx = max(0, first_frozen_idx - blocks_per_step + 1)
+
+        print(f"[{type(self).__name__}] Unfreezing Blocks {first_frozen_idx} -> {target_idx}...")
+        
+        for i in range(first_frozen_idx, target_idx - 1, -1):
+            for param in self.backbone.blocks[i].parameters():
+                param.requires_grad = True
+        
+        return True
