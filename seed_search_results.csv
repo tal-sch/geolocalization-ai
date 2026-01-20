@@ -1,0 +1,3 @@
+Timestamp,Seed,Best_Distance_Meters
+Sat Jan 17 20:26:26 2026,769646,inf,FAILED: unsupported format string passed to tuple.__format
+Sat Jan 17 21:02:20 2026,923507,inf,INTERRUPTED
