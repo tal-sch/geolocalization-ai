@@ -23,11 +23,13 @@ train_data_heatmap.html
 /LightGlue
 *.jpg
 /.vscode
+.vscode/
 .vscode/settings.json
 
 # --- Datasets ---
 dataset_root/
 dataset_root.zip
+data_processed_manual_gps_252x182/
 
 # --- Notebooks & Logs to Ignore ---
 DL_Project.ipynb

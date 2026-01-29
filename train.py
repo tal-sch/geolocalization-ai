@@ -1,3 +1,8 @@
+# ruff: noqa: E402
+import sys
+print("🚀 Initializing libraries and CUDA environment... (This usually takes 10-20 seconds)")
+sys.stdout.flush()
+
 # --- Standard Library Imports ---
 import os
 import joblib
