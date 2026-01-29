@@ -49,15 +49,26 @@ git clone https://github.com/tal-sch/geolocalization-ai.git
 cd geolocalization-ai
 ```
 
-#### 2. Create a Virtual Environment (Conda recommended)
+#### 2. Create a Virtual Environment 
 ```bash
 conda create -n geoloc python=3.9
 conda activate geoloc
 ```
-
+or
+```bash
+python -m venv .venv
+.\.venv\Scripts\Activate
+```
 #### 3. Install Dependencies
 ```bash
 pip install -r requirements.txt
+```
+
+#### 4. Ensure the CUDA enabled version of torch is installed   
+Check https://pytorch.org/get-started/locally/ to find the correct version for your machine:
+```bash
+pip uninstall torch torchvision -y
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 ```
 
 **Main dependencies:**  
