@@ -90,7 +90,7 @@ Your directory structure should look like this:
 
 ```text
 geolocalization-AI/
-├── dataset_root/
+├── dataset_root/         # Extracted dataset
 │   ├── images/
 │   │   ├── IMG_001.jpg
 │   │   └── ...
@@ -100,11 +100,8 @@ geolocalization-AI/
 ├── runs/                 # TensorBoard logs
 │   └── (empty)
 ├── src/
-│   ├── __init__.py
-│   ├── dataset.py
-│   ├── models.py
-│   └── utils.py
-├── coordinate_scaler.pkl
+│   └── ...
+├── coordinate_scaler_main.pkl
 ├── prediction.ipynb
 ├── prediction.py
 ├── train.ipynb
