@@ -14,7 +14,6 @@ venv/
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 /data_processed
-/runs
 /data_processed_387x516
 train_data_heatmap.html
 /data_manual_gps
@@ -25,3 +24,24 @@ train_data_heatmap.html
 *.jpg
 /.vscode
 .vscode/settings.json
+
+# --- Datasets ---
+dataset_root/
+dataset_root.zip
+
+# --- Notebooks & Logs to Ignore ---
+DL_Project.ipynb
+full_training_history.npz
+phase1_metrics.npz
+runs/*
+
+# --- Standard Python Ignores (Recommended) ---
+__pycache__/
+.venv/
+.ipynb_checkpoints/
+*.pyc
+
+# --- Whitelist (Optional) ---
+# Ensure these are tracked even if standard rules ignore them
+!coordinate_scaler_main.pkl
+!runs/

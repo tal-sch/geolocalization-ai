@@ -20,6 +20,7 @@ from src.utils import (haversine_distance, setup_TensorBoard_writers)
 from src.dataset import GeolocalizationDataset
 from src.models import MultiTaskDINOGeo
 
+print("Optimizing torch backend for performance(takes a moment)...")
 torch.backends.cudnn.benchmark = True
 
 IMAGES_PATH = "dataset_root/images/"
