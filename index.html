@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="description" content="Visual Geolocalization via Multi-Task Foundation Models.">
+  <meta name="keywords" content="Visual Localization, DINOv2, Deep Learning, BGU, Progressive Unfreezing">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Visual Geolocalization via Multi-Task Foundation Models</title>
+
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <style>
+    body { font-family: 'Noto Sans', sans-serif; background-color: #ffffff; color: #363636; }
+    .publication-title { font-family: 'Google Sans', sans-serif; font-weight: 700 !important; }
+    .section { padding: 2rem 1.5rem; }
+    .content h2 { font-family: 'Google Sans', sans-serif; margin-bottom: 1rem; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+    .author-block { margin-right: 15px; font-weight: 500; }
+    .results-card { background: #f9f9f9; border-radius: 12px; padding: 1.5rem; border: 1px solid #eee; margin-top: 1rem; margin-bottom: 2rem; }
+    .error-metric { color: #209cee; font-weight: bold; font-size: 1.8rem; }
+    img { border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+    .figure-caption { font-size: 0.9rem; color: #666; margin-top: 10px; font-style: italic; }
+  </style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column has-text-centered">
+          <h1 class="title is-1 publication-title">Visual Geolocalization via Multi-Task Foundation Models 📍</h1>
+          <div class="is-size-5 publication-authors">
+            <span class="author-block">Ilan Rozinko<sup>1</sup></span>
+            <span class="author-block">Tal Schnaider<sup>1</sup></span>
+          </div>
+          <div class="is-size-5 publication-authors">
+            <span class="author-block"><sup>1</sup>Ben-Gurion University of the Negev</span>
+          </div>
+
+          <div class="column has-text-centered">
+            <div class="publication-links">
+              <span class="link-block">
+                <a href="https://github.com/tal-sch/geolocalization-ai" class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="fab fa-github"></i>
+                  </span>
+                  <span>Code</span>
+                </a>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="content">
+      <p class="is-size-5">
+        This project addresses the challenge of precise urban geolocalization by predicting the exact coordinates of images captured across the Ben-Gurion University campus. By utilizing a multi-task training framework built upon a pre-trained DINOv2 foundation model, we achieve high-precision results even in environments with unreliable GPS or significant illumination changes.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="section" style="padding-top: 0;">
+  <div class="container is-max-desktop">
+    <div class="results-card">
+      <div class="columns is-vcentered">
+        <div class="column has-text-centered">
+          <p class="is-size-6 uppercase">Median Localization Error</p>
+          <p class="error-metric">8.97m</p>
+        </div>
+        <div class="column has-text-centered">
+          <p class="is-size-6 uppercase">Mean Localization Error</p>
+          <p class="error-metric">12.48m</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="content">
+      <h2>Methodology</h2>
+      <p>
+        Our research cycle involved managing the entire lifecycle of a Deep Learning product, from data acquisition to model optimization:
+      </p>
+      <ul>
+        <li><strong>Data Collection & Manual Geotagging:</strong> We collected approximately 1,500 images across campus. Because standard smartphone GPS is noisy, we performed manual geotagging to create accurate ground truth labels.</li>
+        <li><strong>Multi-Task Training:</strong> To stabilize predictions on a small dataset, we trained the model on two simultaneous tasks: coordinate regression (Latitude/Longitude) and zone classification (25 topological clusters).</li>
+        <li><strong>Progressive Unfreezing:</strong> We started by freezing layers 1-11 of the pre-trained DINOv2 backbone. Every 20 training epochs, we unfroze an additional layer to progressively adapt the model to campus-specific features.</li>
+      </ul>
+      <div class="has-text-centered mt-5">
+        <img src="assets/methodology.png" alt="Project Methodology Pipeline" width="100%">
+        <p class="figure-caption">Figure 1: The end-to-end methodology from data collection to multi-task training.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="content">
+      <h2>Model Architecture</h2>
+      <p>
+        The system uses a shared DINOv2 backbone to extract features that are passed through a shared block followed by separate regression and classification heads. The classification head acts as a regularizer, helping the model learn a general sense of location before refining exact coordinates through the regression head.
+      </p>
+      <div class="has-text-centered mt-5">
+        <img src="assets/pipeline.png" alt="Multi-Task Model Architecture" width="100%">
+        <p class="figure-caption">Figure 2: Architecture overview featuring DINOv2 backbone with dual heads.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="content">
+      <h2>Training Analysis</h2>
+      <p>
+        During training, we synchronized our progressive unfreezing schedule with updates to the learning rate scheduler. This strategy allowed the model to converge effectively, reaching a stable "Victory Lap" phase with a best mean error of 12.48m and a median of 8.97m.
+      </p>
+      <div class="has-text-centered mt-5">
+        <img src="assets/results_graph.png" alt="Localization Error and Learning Rate Graph" width="100%">
+        <p class="figure-caption">Figure 3: Localization error (meters) and Learning Rate over training epochs.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="content">
+      <h2>Campus Geolocalization Analysis</h2>
+      <p>
+        The spatial distribution of our results shows that while the DINOv2 backbone provides solid accuracy for both day and night photos, outliers still occur. These failures are often linked to regions with low image detail, repetitive textures, or GPS drift in the original data.
+      </p>
+      <div class="has-text-centered mt-5">
+        <img src="assets/map_results.png" alt="BGU Campus Map True vs Predicted Points" width="100%">
+        <p class="figure-caption">Figure 4: Spatial analysis of True vs. Predicted coordinates on the BGU campus.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container">
+    <div class="content has-text-centered">
+      <p>© 2026 Visual Geolocalization Team | Ben-Gurion University of the Negev</p>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
