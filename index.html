@@ -14,13 +14,18 @@
   <style>
     body { font-family: 'Noto Sans', sans-serif; background-color: #ffffff; color: #363636; }
     .publication-title { font-family: 'Google Sans', sans-serif; font-weight: 700 !important; }
-    .section { padding: 2rem 1.5rem; }
+    
+    .container.is-max-desktop {
+      max-width: 960px !important; /* Constrains the width to a narrow academic column */
+    }
+    
+    .section { padding: 2rem 0; } /* Reduces vertical gaps and removes horizontal padding */
     .content h2 { font-family: 'Google Sans', sans-serif; margin-bottom: 1rem; border-bottom: 1px solid #eee; padding-bottom: 10px; }
     .author-block { margin-right: 15px; font-weight: 500; }
     .results-card { background: #f9f9f9; border-radius: 12px; padding: 1.5rem; border: 1px solid #eee; margin-top: 1rem; margin-bottom: 2rem; }
     .error-metric { color: #209cee; font-weight: bold; font-size: 1.8rem; }
-    img { border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
-    .figure-caption { font-size: 0.9rem; color: #666; margin-top: 10px; font-style: italic; }
+    img { border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); width: 100%; height: auto; }
+    .figure-caption { font-size: 0.9rem; color: #666; margin-top: 10px; font-style: italic; text-align: center; }
   </style>
 </head>
 <body>
@@ -97,7 +102,7 @@
         <li><strong>Progressive Unfreezing:</strong> We started by freezing layers 1-11 of the pre-trained DINOv2 backbone. Every 20 training epochs, we unfroze an additional layer to progressively adapt the model to campus-specific features.</li>
       </ul>
       <div class="has-text-centered mt-5">
-        <img src="assets/methodology.png" alt="Project Methodology Pipeline" width="100%">
+        <img src="assets/methodology.png" alt="Project Methodology Pipeline">
         <p class="figure-caption">Figure 1: The end-to-end methodology from data collection to multi-task training.</p>
       </div>
     </div>
@@ -112,7 +117,7 @@
         The system uses a shared DINOv2 backbone to extract features that are passed through a shared block followed by separate regression and classification heads. The classification head acts as a regularizer, helping the model learn a general sense of location before refining exact coordinates through the regression head.
       </p>
       <div class="has-text-centered mt-5">
-        <img src="assets/pipeline.png" alt="Multi-Task Model Architecture" width="100%">
+        <img src="assets/pipeline.png" alt="Multi-Task Model Architecture">
         <p class="figure-caption">Figure 2: Architecture overview featuring DINOv2 backbone with dual heads.</p>
       </div>
     </div>
@@ -127,7 +132,7 @@
         During training, we synchronized our progressive unfreezing schedule with updates to the learning rate scheduler. This strategy allowed the model to converge effectively, reaching a stable "Victory Lap" phase with a best mean error of 12.48m and a median of 8.97m.
       </p>
       <div class="has-text-centered mt-5">
-        <img src="assets/results_graph.png" alt="Localization Error and Learning Rate Graph" width="100%">
+        <img src="assets/results_graph.png" alt="Localization Error and Learning Rate Graph">
         <p class="figure-caption">Figure 3: Localization error (meters) and Learning Rate over training epochs.</p>
       </div>
     </div>
@@ -142,7 +147,7 @@
         The spatial distribution of our results shows that while the DINOv2 backbone provides solid accuracy for both day and night photos, outliers still occur. These failures are often linked to regions with low image detail, repetitive textures, or GPS drift in the original data.
       </p>
       <div class="has-text-centered mt-5">
-        <img src="assets/map_results.png" alt="BGU Campus Map True vs Predicted Points" width="100%">
+        <img src="assets/map_results.png" alt="BGU Campus Map True vs Predicted Points">
         <p class="figure-caption">Figure 4: Spatial analysis of True vs. Predicted coordinates on the BGU campus.</p>
       </div>
     </div>
@@ -150,7 +155,7 @@
 </section>
 
 <footer class="footer">
-  <div class="container">
+  <div class="container is-max-desktop">
     <div class="content has-text-centered">
       <p>© 2026 Visual Geolocalization Team | Ben-Gurion University of the Negev</p>
     </div>
